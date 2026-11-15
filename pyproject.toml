@@ -1,0 +1,42 @@
+[project]
+name = "cplib"
+version = "0.1.0"
+description = "AtCoder 向けの Python 競技プログラミングライブラリ"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+cplib-expand = "cplib.expand:main"
+
+[dependency-groups]
+dev = ["pyright", "pytest", "ruff"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+# AtCoder の PyPy が 3.11 相当のため
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "TID252"]
+# 競プロでは l や O などの短い変数名、ラムダの代入を多用するため
+ignore = ["E741", "E731"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# 展開スクリプトが絶対 import しか解決しないため
+ban-relative-imports = "all"
+
+[tool.pyright]
+include = ["cplib", "tests"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "cplib"]
+# docstring の使用例を検証するため
+addopts = "--doctest-modules"
