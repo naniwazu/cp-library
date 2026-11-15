@@ -24,5 +24,4 @@ uv run pytest
 AtCoder の生成AI対策ルールに従い、生成AIを使って書いたコードもここで事前に公開し、
 提出時にはこのリポジトリの URL を記載している。
 
-ac-library-python と同じ機能は、名前と引数をそれに合わせて自前で実装している。
-未実装のもの（CRT、suffix array など）は `atcoder` を使う。
+ac-library-python と同じ機能（ModInt を除く）は、名前と引数をそれに合わせて自前で実装している。
