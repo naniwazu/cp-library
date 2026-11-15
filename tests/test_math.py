@@ -1,10 +1,12 @@
 import random
-from math import comb, factorial, perm
+from math import comb, factorial, gcd, lcm, perm
 
 import pytest
 
 from cplib.math.comb import Comb
+from cplib.math.convolution import convolution
 from cplib.math.floor_sum import floor_sum
+from cplib.math.mod import crt, inv_mod
 from cplib.math.prime import factorize, is_prime, min_factor_table, primes
 
 MOD = 998244353
@@ -105,3 +107,89 @@ def test_factorize_large() -> None:
     assert factorize(p * p) == {p: 2}
     assert factorize(2**63) == {2: 63}
     assert factorize(1) == {}
+
+
+def test_inv_mod() -> None:
+    for m in range(1, 60):
+        for x in range(-2 * m, 2 * m):
+            if gcd(x, m) == 1:
+                y = inv_mod(x, m)
+                assert 0 <= y < m and x * y % m == 1 % m
+            else:
+                with pytest.raises(ValueError):
+                    inv_mod(x, m)
+    m = 10**18 + 9
+    assert inv_mod(-(10**30), m) * -(10**30) % m == 1
+
+
+def naive_crt(r: list[int], m: list[int]) -> tuple[int, int]:
+    z = lcm(*m)
+    for y in range(z):
+        if all((y - ri) % mi == 0 for ri, mi in zip(r, m, strict=True)):
+            return (y, z)
+    return (0, 0)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_crt(seed: int) -> None:
+    rng = random.Random(seed)
+    for _ in range(200):
+        k = rng.randint(0, 4)
+        m = [rng.randint(1, 12) for _ in range(k)]
+        r = [rng.randint(-30, 30) for _ in range(k)]
+        assert crt(r, m) == naive_crt(r, m)
+
+
+def test_crt_large() -> None:
+    ps = [998244353, 10**9 + 7, 10**9 + 9]
+    x = 123456789123456789123456789 % (ps[0] * ps[1] * ps[2])
+    assert crt([x % p for p in ps], ps) == (x, ps[0] * ps[1] * ps[2])
+    m = [2**40 * 3, 2**20 * 5**10]
+    x = 10**20
+    assert crt([x % mi for mi in m], m) == (x % lcm(*m), lcm(*m))
+    assert crt([x % mi + 1 for mi in m], m) == (x % lcm(*m) + 1, lcm(*m))
+    assert crt([0, 1], m) == (0, 0)
+
+
+def naive_convolution(mod: int, a: list[int], b: list[int]) -> list[int]:
+    c = [0] * (len(a) + len(b) - 1) if a and b else []
+    for i, x in enumerate(a):
+        for j, y in enumerate(b):
+            c[i + j] += x * y
+    return [x % mod for x in c]
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_convolution(seed: int) -> None:
+    rng = random.Random(seed)
+    for _ in range(30):
+        # 愚直に切り替える境目（短い側の長さ 60）の前後を含める
+        n = rng.choice((0, 1, 2, rng.randint(1, 200), rng.randint(55, 70)))
+        m = rng.choice((0, 1, 2, rng.randint(1, 200), rng.randint(55, 70)))
+        lim = rng.choice((10, MOD, 10**18))
+        a = [rng.randint(-lim, lim) for _ in range(n)]
+        b = [rng.randint(-lim, lim) for _ in range(m)]
+        a0 = a[:]
+        b0 = b[:]
+        assert convolution(MOD, a, b) == naive_convolution(MOD, a, b)
+        assert (a, b) == (a0, b0)
+
+
+@pytest.mark.parametrize(
+    ("mod", "n", "m"),
+    [
+        (MOD, 2000, 3000),
+        (MOD, 1 << 11, 1 << 11),
+        (167772161, 1000, 1025),
+        (469762049, 700, 300),
+        (754974721, 512, 513),
+        # 長さ n + m - 1 を 2 の冪に切り上げたものが mod - 1 を割り切る上限ちょうど
+        (257, 128, 128),
+        (7681, 300, 200),
+    ],
+)
+def test_convolution_ntt(mod: int, n: int, m: int) -> None:
+    rng = random.Random(n * m)
+    a = [rng.randrange(mod) for _ in range(n)]
+    b = [rng.randrange(mod) for _ in range(m)]
+    assert convolution(mod, a, b) == naive_convolution(mod, a, b)
