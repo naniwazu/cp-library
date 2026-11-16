@@ -109,6 +109,8 @@ def factorize(n: int) -> dict[int, int]:
         >>> factorize(999999999999999989 * 3)
         {3: 1, 999999999999999989: 1}
     """
+    # 0 は試し割りが終わらない
+    assert n >= 1
     res: dict[int, int] = {}
     # 小さい素因数は試し割りのほうが速い
     for p in range(2, 100):
