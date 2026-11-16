@@ -1,4 +1,4 @@
-from bisect import bisect_left, bisect_right, insort
+from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator
 from math import isqrt
 from typing import Any, Generic, Protocol, TypeVar
@@ -43,7 +43,10 @@ class SortedList(Generic[_SortedListT]):
         # 24b 個を超えたら 2 つに割る。b ≒ √(n / 16) に保たれる
         b = isqrt(n // 16) + 1 if n else 0
         self._a = [a[n * i // b : n * (i + 1) // b] for i in range(b)]
-        # 各バケットの最大値。値からバケットを二分探索で引くため
+        # 各バケットの最大値。値の入るバケットはこれを先頭から線形に走査して探す。
+        # PyPy 3.11 の bisect は純 Python 実装で、呼び出しと分岐の多いループが重く、
+        # 要素数 2×10^5 以下では線形走査のほうが 1〜3 割速い。10^6（バケット数
+        # 250 前後）でも整数なら二分探索と 5% 以内の差に収まる
         self._m = [x[-1] for x in self._a]
         self._n = n
 
@@ -55,9 +58,12 @@ class SortedList(Generic[_SortedListT]):
             yield from b
 
     def __contains__(self, x: _SortedListT) -> bool:
-        i = bisect_left(self._m, x)
-        if i == len(self._m):
+        m = self._m
+        if not m or m[-1] < x:
             return False
+        i = 0
+        while m[i] < x:
+            i += 1
         b = self._a[i]
         return b[bisect_left(b, x)] == x
 
@@ -85,15 +91,18 @@ class SortedList(Generic[_SortedListT]):
             a.append([x])
             m.append(x)
             return
-        i = bisect_right(m, x)
-        if i == len(m):
-            i -= 1
+        if x < m[-1]:
+            i = 0
+            while not x < m[i]:
+                i += 1
+            b = a[i]
+            b.insert(bisect_right(b, x), x)
+        else:
+            # 最大値以上なら末尾に足す。昇順に追加し続ける場合を O(1) にするため
+            i = len(m) - 1
             b = a[i]
             b.append(x)
             m[i] = x
-        else:
-            b = a[i]
-            insort(b, x)
         if len(b) > 24 * len(a):
             h = len(b) >> 1
             a.insert(i + 1, b[h:])
@@ -113,9 +122,12 @@ class SortedList(Generic[_SortedListT]):
 
     def discard(self, x: _SortedListT) -> None:
         """x があれば 1 個だけ取り除く。なければ何もしない。"""
-        i = bisect_left(self._m, x)
-        if i == len(self._m):
+        m = self._m
+        if not m or m[-1] < x:
             return
+        i = 0
+        while m[i] < x:
+            i += 1
         b = self._a[i]
         j = bisect_left(b, x)
         if b[j] == x:
@@ -145,20 +157,20 @@ class SortedList(Generic[_SortedListT]):
 
     def bisect_left(self, x: _SortedListT) -> int:
         """x 未満の要素の個数を返す。"""
-        a = self._a
-        i = bisect_left(self._m, x)
-        k = bisect_left(a[i], x) if i < len(a) else 0
-        for j in range(i):
-            k += len(a[j])
+        k = 0
+        for b in self._a:
+            if not b[-1] < x:
+                return k + bisect_left(b, x)
+            k += len(b)
         return k
 
     def bisect_right(self, x: _SortedListT) -> int:
         """x 以下の要素の個数を返す。"""
-        a = self._a
-        i = bisect_right(self._m, x)
-        k = bisect_right(a[i], x) if i < len(a) else 0
-        for j in range(i):
-            k += len(a[j])
+        k = 0
+        for b in self._a:
+            if x < b[-1]:
+                return k + bisect_right(b, x)
+            k += len(b)
         return k
 
     def index(self, x: _SortedListT) -> int:
@@ -175,37 +187,49 @@ class SortedList(Generic[_SortedListT]):
     def lt(self, x: _SortedListT) -> _SortedListT | None:
         """x 未満の最大の要素を返す。なければ None。"""
         m = self._m
-        i = bisect_left(m, x)
-        if i < len(m):
-            b = self._a[i]
-            j = bisect_left(b, x)
-            if j:
-                return b[j - 1]
+        if not m or m[-1] < x:
+            return m[-1] if m else None
+        i = 0
+        while m[i] < x:
+            i += 1
+        b = self._a[i]
+        j = bisect_left(b, x)
+        if j:
+            return b[j - 1]
         return m[i - 1] if i else None
 
     def le(self, x: _SortedListT) -> _SortedListT | None:
         """x 以下の最大の要素を返す。なければ None。"""
         m = self._m
-        i = bisect_right(m, x)
-        if i < len(m):
-            b = self._a[i]
-            j = bisect_right(b, x)
-            if j:
-                return b[j - 1]
+        if not m or not x < m[-1]:
+            return m[-1] if m else None
+        i = 0
+        while not x < m[i]:
+            i += 1
+        b = self._a[i]
+        j = bisect_right(b, x)
+        if j:
+            return b[j - 1]
         return m[i - 1] if i else None
 
     def gt(self, x: _SortedListT) -> _SortedListT | None:
         """x より大きい最小の要素を返す。なければ None。"""
-        i = bisect_right(self._m, x)
-        if i == len(self._m):
+        m = self._m
+        if not m or not x < m[-1]:
             return None
+        i = 0
+        while not x < m[i]:
+            i += 1
         b = self._a[i]
         return b[bisect_right(b, x)]
 
     def ge(self, x: _SortedListT) -> _SortedListT | None:
         """x 以上の最小の要素を返す。なければ None。"""
-        i = bisect_left(self._m, x)
-        if i == len(self._m):
+        m = self._m
+        if not m or m[-1] < x:
             return None
+        i = 0
+        while m[i] < x:
+            i += 1
         b = self._a[i]
         return b[bisect_left(b, x)]
