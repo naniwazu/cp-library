@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 from cplib.ds.fenwick_tree import FenwickTree
+from cplib.misc.compress import compress
 
 
 def inversion_number(a: Sequence[int]) -> int:
@@ -12,12 +13,11 @@ def inversion_number(a: Sequence[int]) -> int:
         >>> inversion_number([3, 1, 2, 1])
         4
     """
-    rank = {x: i for i, x in enumerate(sorted(set(a)))}
-    ft = FenwickTree(len(rank))
+    vals, rank = compress(a)
+    ft = FenwickTree(len(vals))
     res = 0
-    for i, x in enumerate(a):
-        r = rank[x]
-        # 先に出た要素のうち x より大きいもの
+    for i, r in enumerate(rank):
+        # 先に出た要素のうち a[i] より大きいもの
         res += i - ft.sum(0, r + 1)
         ft.add(r, 1)
     return res
