@@ -1,5 +1,7 @@
+import bisect
 import random
 from collections.abc import Callable
+from math import gcd
 
 import pytest
 
@@ -8,6 +10,9 @@ from cplib.ds.fenwick_tree import FenwickTree
 from cplib.ds.lazy_segtree import LazySegTree
 from cplib.ds.segtree import SegTree
 from cplib.ds.slope_trick import SlopeTrick
+from cplib.ds.sorted_list import SortedList
+from cplib.ds.sparse_table import SparseTable
+from cplib.ds.weighted_dsu import WeightedDSU
 
 
 @pytest.mark.parametrize("seed", range(20))
@@ -182,3 +187,137 @@ def test_lazy_segtree(n: int) -> None:
             r = rng.randint(0, n)
             assert st.min_left(r, g) == _min_left(a, r, g)
         assert st.all_prod() == "".join(a)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_weighted_dsu(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 30)
+    # 正しい制約はこの隠れたポテンシャルから作る
+    pot = [rng.randint(-100, 100) for _ in range(n)]
+    uf = WeightedDSU(n)
+    label = list(range(n))
+    for _ in range(3 * n):
+        a = rng.randrange(n)
+        b = rng.randrange(n)
+        w = pot[b] - pot[a]
+        if label[a] == label[b] and rng.random() < 0.5:
+            assert not uf.merge(a, b, w + rng.choice([-1, 1]) * rng.randint(1, 5))
+        else:
+            assert uf.merge(a, b, w)
+            la, lb = label[a], label[b]
+            label = [la if c == lb else c for c in label]
+        assert uf.leader(a) == uf.leader(b)
+        for i in range(n):
+            j = rng.randrange(n)
+            same = label[i] == label[j]
+            assert uf.same(i, j) == same
+            assert uf.diff(i, j) == (pot[j] - pot[i] if same else None)
+            assert uf.size(i) == label.count(label[i])
+
+
+def _sorted_list_check(s: SortedList[int], ref: list[int], x: int) -> None:
+    assert len(s) == len(ref)
+    assert (x in s) == (x in ref)
+    i = bisect.bisect_left(ref, x)
+    j = bisect.bisect_right(ref, x)
+    assert s.bisect_left(x) == i
+    assert s.bisect_right(x) == j
+    assert s.count(x) == j - i
+    assert s.lt(x) == (ref[i - 1] if i else None)
+    assert s.le(x) == (ref[j - 1] if j else None)
+    assert s.gt(x) == (ref[j] if j < len(ref) else None)
+    assert s.ge(x) == (ref[i] if i < len(ref) else None)
+    if i < j:
+        assert s.index(x) == i
+    else:
+        with pytest.raises(ValueError):
+            s.index(x)
+
+
+def test_sorted_list_empty() -> None:
+    s = SortedList[int]()
+    _sorted_list_check(s, [], 0)
+    assert list(s) == []
+    s.discard(0)
+    for k in (0, -1):
+        with pytest.raises(IndexError):
+            s[k]
+        with pytest.raises(IndexError):
+            s.pop(k)
+    with pytest.raises(IndexError):
+        s.pop()
+    with pytest.raises(ValueError):
+        s.remove(0)
+    assert len(s) == 0
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_sorted_list(seed: int) -> None:
+    rng = random.Random(seed)
+    # 値の範囲を狭くして重複を多くする場合と、広くする場合を混ぜる
+    hi = rng.choice([3, 30, 10**9])
+    ref = sorted(rng.randint(0, hi) for _ in range(rng.choice([0, 1, 50, 1000])))
+    s = SortedList(rng.sample(ref, len(ref)))
+    for _ in range(2000):
+        t = rng.randrange(8)
+        x = rng.randint(-1, hi + 1)
+        if t <= 1:
+            # 追加を多めにして、バケットの分割が起こるようにする
+            s.add(x)
+            bisect.insort(ref, x)
+        elif t == 2:
+            s.discard(x)
+            if x in ref:
+                ref.remove(x)
+        elif t == 3:
+            if x in ref:
+                s.remove(x)
+                ref.remove(x)
+            else:
+                with pytest.raises(ValueError):
+                    s.remove(x)
+        elif t == 4:
+            k = rng.randint(-len(ref) - 2, len(ref) + 1)
+            if -len(ref) <= k < len(ref):
+                assert s.pop(k) == ref.pop(k)
+            else:
+                with pytest.raises(IndexError):
+                    s.pop(k)
+        elif t == 5 and ref:
+            assert s.pop() == ref.pop()
+        else:
+            k = rng.randint(-len(ref) - 2, len(ref) + 1)
+            if -len(ref) <= k < len(ref):
+                assert s[k] == ref[k]
+            else:
+                with pytest.raises(IndexError):
+                    s[k]
+        _sorted_list_check(s, ref, x)
+    assert list(s) == ref
+
+
+def _left(a: int, b: int) -> int:
+    return a
+
+
+def _right(a: int, b: int) -> int:
+    return b
+
+
+# _left / _right は非可換で、引数の順序まで確かめる
+SPARSE_TABLE_OPS: list[Callable[[int, int], int]] = [min, max, gcd, _left, _right]
+
+
+@pytest.mark.parametrize("n", SIZES)
+@pytest.mark.parametrize("op", SPARSE_TABLE_OPS)
+def test_sparse_table(n: int, op: Callable[[int, int], int]) -> None:
+    rng = random.Random(n)
+    a = [rng.randint(0, 30) for _ in range(n)]
+    st = SparseTable(op, a)
+    for l in range(n):
+        acc = a[l]
+        for r in range(l + 1, n + 1):
+            if r - 1 > l:
+                acc = op(acc, a[r - 1])
+            assert st.prod(l, r) == acc
