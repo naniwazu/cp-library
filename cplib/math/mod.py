@@ -40,3 +40,30 @@ def crt(r: list[int], m: list[int]) -> tuple[int, int]:
         r0 += (r1 - r0) // g * pow(m0 // g, -1, u1) % u1 * m0
         m0 *= u1
     return (r0, m0)
+
+
+def ext_gcd(a: int, b: int) -> tuple[int, int, int]:
+    """a * x + b * y == g となる (g, x, y) を返す（g = gcd(a, b)）。
+
+    拡張ユークリッドの互除法。1 次不定方程式 a * x + b * y = c を解く問題に使う。
+    c が g で割り切れるときに限り解があり、(x * (c // g), y * (c // g)) が
+    その 1 つになる。
+    a, b は負や 0 でもよい。g は常に 0 以上で、gcd(0, 0) = 0 とする。
+    O(log min(|a|, |b|))。
+    |x| <= max(|b| // g, 1)、|y| <= max(|a| // g, 1) を満たす（g > 0 のとき）。
+
+    Examples:
+        >>> ext_gcd(12, 18)
+        (6, -1, 1)
+        >>> ext_gcd(-4, 6), ext_gcd(0, -5), ext_gcd(0, 0)
+        ((2, 1, 1), (5, 0, -1), (0, 1, 0))
+    """
+    x0, y0, x1, y1 = 1, 0, 0, 1
+    while b:
+        q = a // b
+        a, b = b, a - q * b
+        x0, x1 = x1, x0 - q * x1
+        y0, y1 = y1, y0 - q * y1
+    if a < 0:
+        return (-a, -x0, -y0)
+    return (a, x0, y0)

@@ -1,13 +1,20 @@
 import random
-from math import comb, factorial, gcd, lcm, perm
+from math import comb, factorial, gcd, isqrt, lcm, perm
 
 import pytest
 
 from cplib.math.comb import Comb
 from cplib.math.convolution import convolution
 from cplib.math.floor_sum import floor_sum
-from cplib.math.mod import crt, inv_mod
-from cplib.math.prime import factorize, is_prime, min_factor_table, primes
+from cplib.math.matrix import mat_mul, mat_pow
+from cplib.math.mod import crt, ext_gcd, inv_mod
+from cplib.math.prime import (
+    divisors,
+    factorize,
+    is_prime,
+    min_factor_table,
+    primes,
+)
 
 MOD = 998244353
 
@@ -193,3 +200,95 @@ def test_convolution_ntt(mod: int, n: int, m: int) -> None:
     a = [rng.randrange(mod) for _ in range(n)]
     b = [rng.randrange(mod) for _ in range(m)]
     assert convolution(mod, a, b) == naive_convolution(mod, a, b)
+
+
+def test_divisors() -> None:
+    for n in range(1, 2000):
+        assert divisors(n) == [d for d in range(1, n + 1) if n % d == 0]
+    rng = random.Random(0)
+    for _ in range(50):
+        n = rng.randint(1, 10**12)
+        expected = sorted(
+            {x for d in range(1, isqrt(n) + 1) if n % d == 0 for x in (d, n // d)}
+        )
+        assert divisors(n) == expected
+
+
+def test_divisors_large() -> None:
+    # 10^18 以下で約数が最も多い数
+    n = 897612484786617600
+    got = divisors(n)
+    assert len(got) == 103680
+    assert got == sorted(set(got)) and all(n % d == 0 for d in got)
+    p, q = 999999937, 1000000007
+    assert divisors(p * q) == [1, p, q, p * q]
+    assert divisors(2**63) == [2**i for i in range(64)]
+
+
+def check_ext_gcd(a: int, b: int) -> None:
+    g, x, y = ext_gcd(a, b)
+    assert g == gcd(a, b)
+    assert a * x + b * y == g
+    if g:
+        assert abs(x) <= max(abs(b) // g, 1) and abs(y) <= max(abs(a) // g, 1)
+
+
+def test_ext_gcd() -> None:
+    for a in range(-40, 41):
+        for b in range(-40, 41):
+            check_ext_gcd(a, b)
+    rng = random.Random(0)
+    for _ in range(1000):
+        lim = rng.choice((10**9, 10**18, 10**30))
+        check_ext_gcd(rng.randint(-lim, lim), rng.randint(-lim, lim))
+
+
+def naive_mat_mul(a: list[list[int]], b: list[list[int]], mod: int) -> list[list[int]]:
+    p = len(b[0]) if b else 0
+    return [
+        [sum(a[i][k] * b[k][j] for k in range(len(b))) % mod for j in range(p)]
+        for i in range(len(a))
+    ]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_mat_mul(seed: int) -> None:
+    rng = random.Random(seed)
+    for _ in range(20):
+        # 8 項ごとに剰余を取る境目の前後を含める
+        n, m, p = (rng.choice((1, 2, 7, 8, 9, rng.randint(1, 30))) for _ in range(3))
+        mod = rng.choice((1, 2, MOD, 10**9 + 7, 2**61 - 1))
+        lim = rng.choice((mod - 1, 10**18))
+        a = [[rng.randint(-lim, lim) for _ in range(m)] for _ in range(n)]
+        b = [[rng.randint(-lim, lim) for _ in range(p)] for _ in range(m)]
+        assert mat_mul(a, b, mod) == naive_mat_mul(a, b, mod)
+
+
+def test_mat_mul_empty() -> None:
+    assert mat_mul([], [], MOD) == []
+    assert mat_mul([[], []], [], MOD) == [[], []]
+    assert mat_mul([], [[1, 2]], MOD) == []
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_mat_pow(seed: int) -> None:
+    rng = random.Random(seed)
+    for _ in range(10):
+        n = rng.randint(0, 6)
+        mod = rng.choice((1, 7, MOD))
+        a = [[rng.randint(-(10**9), 10**9) for _ in range(n)] for _ in range(n)]
+        expected = [[int(i == j) % mod for j in range(n)] for i in range(n)]
+        for k in range(20):
+            assert mat_pow(a, k, mod) == expected
+            expected = naive_mat_mul(expected, a, mod)
+
+
+def test_mat_pow_large() -> None:
+    # 2 × 2 のフィボナッチ行列の k 乗は [[F(k+1), F(k)], [F(k), F(k-1)]]
+    k = 10**18
+    f = mat_pow([[1, 1], [1, 0]], k, MOD)
+    f2 = mat_pow([[1, 1], [1, 0]], 2 * k, MOD)
+    # F(2k) = F(k) (2 F(k+1) - F(k))
+    assert f2[0][1] == f[0][1] * (2 * f[0][0] - f[0][1]) % MOD
+    a = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    assert mat_pow(a, 10**18 + 1, MOD) == mat_mul(mat_pow(a, 10**18, MOD), a, MOD)

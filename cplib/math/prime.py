@@ -137,3 +137,28 @@ def factorize(n: int) -> dict[int, int]:
             stack.append(d)
             stack.append(x // d)
     return dict(sorted(res.items()))
+
+
+def divisors(n: int) -> list[int]:
+    """n の正の約数を昇順に返す（1 <= n < 2^64）。
+
+    約数を全列挙して調べる問題に使う。factorize で素因数分解してから組み立てるので、
+    10^18 程度の n でも速い。約数の個数を d として O(n^(1/4) + d log d)（期待値）。
+
+    Examples:
+        >>> divisors(12)
+        [1, 2, 3, 4, 6, 12]
+        >>> divisors(1)
+        [1]
+    """
+    assert n >= 1
+    res = [1]
+    for p, e in factorize(n).items():
+        m = len(res)
+        q = 1
+        for _ in range(e):
+            q *= p
+            for i in range(m):
+                res.append(res[i] * q)
+    res.sort()
+    return res
