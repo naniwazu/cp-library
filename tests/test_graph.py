@@ -1,21 +1,30 @@
 import itertools
 import random
+from collections.abc import Callable
+from typing import TypeVar
 
 import pytest
 
+from cplib.graph.bellman_ford import bellman_ford
 from cplib.graph.bfs import bfs, bfs_prev
+from cplib.graph.bipartite_matching import maximum_bipartite_matching
 from cplib.graph.dijkstra import dijkstra, dijkstra_prev
+from cplib.graph.doubling import Doubling
 from cplib.graph.floyd_warshall import floyd_warshall
 from cplib.graph.grid_bfs import grid_bfs
 from cplib.graph.lca import LCA
+from cplib.graph.lowlink import articulation_points, bridges
 from cplib.graph.maxflow import MFGraph
 from cplib.graph.mincostflow import MCFGraph
 from cplib.graph.minimum_spanning_tree import minimum_spanning_tree
 from cplib.graph.reconstruct_path import reconstruct_path
+from cplib.graph.rerooting import rerooting
 from cplib.graph.scc import SCCGraph
 from cplib.graph.topological_sort import topological_sort
 from cplib.graph.tree_diameter import tree_diameter
 from cplib.graph.two_sat import TwoSAT
+
+T = TypeVar("T")
 
 
 def reachability(n: int, edges: list[tuple[int, int]]) -> list[list[bool]]:
@@ -294,7 +303,9 @@ def test_mcf_graph_unreachable() -> None:
     assert g.slope(0, 2) == [(0, 0)]
 
 
-def bellman_ford(n: int, s: int, edges: list[tuple[int, int, int]]) -> list[int]:
+def shortest_distances_brute(
+    n: int, s: int, edges: list[tuple[int, int, int]]
+) -> list[int]:
     dist = [-1] * n
     dist[s] = 0
     for _ in range(n):
@@ -341,7 +352,7 @@ def test_dijkstra(seed: int) -> None:
     for u, v, c in edges:
         g[u].append((v, c))
     s = rng.randrange(n)
-    expected = bellman_ford(n, s, edges)
+    expected = shortest_distances_brute(n, s, edges)
     assert dijkstra(g, s) == expected
     dist, prev = dijkstra_prev(g, s)
     assert dist == expected
@@ -368,7 +379,7 @@ def test_bfs(seed: int) -> None:
     for u, v, _ in edges:
         g[u].append(v)
     s = rng.randrange(n)
-    expected = bellman_ford(n, s, edges)
+    expected = shortest_distances_brute(n, s, edges)
     assert bfs(g, s) == expected
     dist, prev = bfs_prev(g, s)
     assert dist == expected
@@ -590,3 +601,261 @@ def test_tree_diameter_long_path() -> None:
     assert length == 2 * (n - 1)
     assert path in (list(range(n)), list(range(n - 1, -1, -1)))
     assert tree_diameter([[]]) == (0, [0])
+
+
+def bellman_ford_brute(
+    n: int, edges: list[tuple[int, int, int]], s: int
+) -> tuple[list[int | None], list[bool]]:
+    # Floyd-Warshall の値は実在する歩道の長さで、負閉路に触れない対では最短距離になる
+    d: list[list[int | None]] = [
+        [0 if i == j else None for j in range(n)] for i in range(n)
+    ]
+    for u, v, w in edges:
+        duv = d[u][v]
+        if duv is None or w < duv:
+            d[u][v] = w
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                dik, dkj, dij = d[i][k], d[k][j], d[i][j]
+                if dik is not None and dkj is not None:
+                    if dij is None or dik + dkj < dij:
+                        d[i][j] = dik + dkj
+    on_cycle = [(d[c][c] or 0) < 0 for c in range(n)]
+    reach = reachability(n, [(u, v) for u, v, _ in edges])
+    neg = [
+        any(reach[s][c] and on_cycle[c] and reach[c][v] for c in range(n))
+        for v in range(n)
+    ]
+    dist = [None if neg[v] or not reach[s][v] else d[s][v] for v in range(n)]
+    return dist, neg
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_bellman_ford(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 8)
+    lo = rng.choice((0, -1, -3, -10))
+    edges = [
+        (rng.randrange(n), rng.randrange(n), rng.randint(lo, 10))
+        for _ in range(rng.randint(0, 3 * n))
+    ]
+    s = rng.randrange(n)
+    assert bellman_ford(n, edges, s) == bellman_ford_brute(n, edges, s)
+
+
+def test_bellman_ford_long_path() -> None:
+    n = 10**5
+    edges = [(i, i + 1, -(10**18)) for i in range(n - 1)]
+    dist, neg = bellman_ford(n, edges, 0)
+    assert dist == [-i * 10**18 for i in range(n)] and not any(neg)
+    assert bellman_ford(1, [], 0) == ([0], [False])
+
+
+def test_bellman_ford_negative_cycle_spreads() -> None:
+    # 負閉路は O(nm) 回すべて回るので n を小さくする。閉路の先の長い道に広がる
+    n = 3000
+    edges = [(i, i + 1, 1) for i in range(n - 1)] + [(2, 1, -2)]
+    dist, neg = bellman_ford(n, edges, 0)
+    assert dist == [0] + [None] * (n - 1)
+    assert neg == [False] + [True] * (n - 1)
+
+
+def rooted_tree_dp(
+    g: list[list[int]],
+    root: int,
+    merge: Callable[[T, T], T],
+    e: T,
+    add_edge: Callable[[T, int, int], T],
+    add_vertex: Callable[[T, int], T],
+) -> T:
+    n = len(g)
+    parent = [-1] * n
+    order = [root]
+    for v in order:
+        for w in g[v]:
+            if w != parent[v]:
+                parent[w] = v
+                order.append(w)
+    acc = [e] * n
+    for v in reversed(order[1:]):
+        p = parent[v]
+        acc[p] = merge(acc[p], add_edge(add_vertex(acc[v], v), v, p))
+    return add_vertex(acc[root], root)
+
+
+def label_vertex(x: frozenset[str], v: int) -> frozenset[str]:
+    return frozenset([f"{v}(" + ",".join(sorted(x)) + ")"])
+
+
+def label_edge(x: frozenset[str], c: int, p: int) -> frozenset[str]:
+    return frozenset([f"{c}>{p}[" + ",".join(sorted(x)) + "]"])
+
+
+def union(a: frozenset[str], b: frozenset[str]) -> frozenset[str]:
+    return a | b
+
+
+@pytest.mark.parametrize("seed", range(50))
+def test_rerooting(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 15)
+    g = random_tree(rng, n)
+    # 根つき木の形と、各コールバックに渡る頂点がすべて文字列に残る
+    e: frozenset[str] = frozenset()
+    got = rerooting(g, union, e, label_edge, label_vertex)
+    assert got == [
+        rooted_tree_dp(g, r, union, e, label_edge, label_vertex) for r in range(n)
+    ]
+
+    assert rerooting(g, max, 0, lambda x, c, p: x + 1, lambda x, v: x) == [
+        max(bfs(g, r)) for r in range(n)
+    ]
+
+    def add_size(x: tuple[int, int], v: int) -> tuple[int, int]:
+        return x[0] + 1, x[1] + x[0] + 1
+
+    def add_pair(a: tuple[int, int], b: tuple[int, int]) -> tuple[int, int]:
+        return a[0] + b[0], a[1] + b[1]
+
+    sizes = rerooting(g, add_pair, (0, 0), lambda x, c, p: x, add_size)
+    assert sizes == [(n, sum(bfs(g, r)) + n) for r in range(n)]
+
+
+def test_rerooting_long_path_and_star() -> None:
+    n = 10**5
+    path = [[v for v in (i - 1, i + 1) if 0 <= v < n] for i in range(n)]
+    far = rerooting(path, max, 0, lambda x, c, p: x + 1, lambda x, v: x)
+    assert far == [max(i, n - 1 - i) for i in range(n)]
+    star = [list(range(1, n))] + [[0] for _ in range(n - 1)]
+    far = rerooting(star, max, 0, lambda x, c, p: x + 1, lambda x, v: x)
+    assert far == [1] + [2] * (n - 1)
+
+
+def max_matching_brute(g: list[list[int]]) -> int:
+    best = {0: 0}
+    for a in g:
+        nxt = dict(best)
+        for mask, c in best.items():
+            for v in a:
+                if not mask >> v & 1 and nxt.get(mask | 1 << v, -1) < c + 1:
+                    nxt[mask | 1 << v] = c + 1
+        best = nxt
+    return max(best.values())
+
+
+def assert_matching(g: list[list[int]], m: int, res: list[int]) -> int:
+    assert len(res) == len(g)
+    used = [v for v in res if v >= 0]
+    assert len(set(used)) == len(used) and all(0 <= v < m for v in used)
+    assert all(v < 0 or v in g[u] for u, v in enumerate(res))
+    return len(used)
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_maximum_bipartite_matching(seed: int) -> None:
+    rng = random.Random(seed)
+    n, m = rng.randint(1, 7), rng.randint(1, 7)
+    # 多重辺や、辺のない頂点を含む
+    g: list[list[int]] = [[] for _ in range(n)]
+    for _ in range(rng.randint(0, 3 * max(n, m))):
+        g[rng.randrange(n)].append(rng.randrange(m))
+    res = maximum_bipartite_matching(g, m)
+    assert assert_matching(g, m, res) == max_matching_brute(g)
+
+
+def test_maximum_bipartite_matching_empty() -> None:
+    assert maximum_bipartite_matching([], 3) == []
+    assert maximum_bipartite_matching([[], []], 0) == [-1, -1]
+
+
+def test_maximum_bipartite_matching_long_path() -> None:
+    # 貪欲法で左 i が右 i + 1 と組み、長さ n の増加路が 1 本残る
+    n = 10**5
+    g = [[i + 1, i] for i in range(n - 1)] + [[n - 1]]
+    res = maximum_bipartite_matching(g, n)
+    assert assert_matching(g, n, res) == n
+
+
+def undirected(n: int, edges: list[tuple[int, int]]) -> list[list[int]]:
+    g: list[list[int]] = [[] for _ in range(n)]
+    for u, v in edges:
+        g[u].append(v)
+        g[v].append(u)
+    return g
+
+
+@pytest.mark.parametrize("seed", range(200))
+def test_lowlink(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 10)
+    # 自己ループ・多重辺・非連結を含む
+    edges = [(rng.randrange(n), rng.randrange(n)) for _ in range(rng.randint(0, 2 * n))]
+    g = undirected(n, edges)
+
+    def components(es: list[tuple[int, int]]) -> int:
+        return component_count(n, [(u, v, 0) for u, v in es])
+
+    base = components(edges)
+    expected = [
+        (min(u, v), max(u, v))
+        for i, (u, v) in enumerate(edges)
+        if components(edges[:i] + edges[i + 1 :]) > base
+    ]
+    got = bridges(g)
+    assert sorted(got) == sorted(expected)
+    assert all(u < v for u, v in got)
+
+    # v を孤立させると v 自身の分だけ成分が 1 つ増える
+    cut = [
+        v
+        for v in range(n)
+        if components([(a, b) for a, b in edges if v not in (a, b)]) - 1 > base
+    ]
+    assert articulation_points(g) == cut
+
+
+def test_lowlink_long_path_and_cycle() -> None:
+    n = 10**5
+    path = undirected(n, [(i, i + 1) for i in range(n - 1)])
+    assert sorted(bridges(path)) == [(i, i + 1) for i in range(n - 1)]
+    assert articulation_points(path) == list(range(1, n - 1))
+    cycle = undirected(n, [(i, (i + 1) % n) for i in range(n)])
+    assert bridges(cycle) == [] and articulation_points(cycle) == []
+    assert bridges([[]]) == [] and articulation_points([[]]) == []
+
+
+def jump_brute(nxt: list[int], v: int, k: int) -> int:
+    seen: dict[int, int] = {}
+    path: list[int] = []
+    while v not in seen:
+        if len(path) == k:
+            return v
+        seen[v] = len(path)
+        path.append(v)
+        v = nxt[v]
+    s = seen[v]
+    return path[s + (k - s) % (len(path) - s)]
+
+
+@pytest.mark.parametrize("seed", range(50))
+def test_doubling(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 10)
+    nxt = [rng.randrange(n) for _ in range(n)]
+    max_k = rng.choice((0, 1, rng.randint(2, 100), 10**18))
+    d = Doubling(nxt, max_k)
+    for _ in range(30):
+        v, k = rng.randrange(n), rng.randint(0, max_k)
+        assert d.jump(v, k) == jump_brute(nxt, v, k)
+    assert d.jump(0, max_k) == jump_brute(nxt, 0, max_k)
+
+
+def test_doubling_long_tail() -> None:
+    # 長さ n / 2 の尻尾の先に長さ n / 2 の閉路
+    n = 10**5
+    nxt = [i + 1 for i in range(n)]
+    nxt[-1] = n // 2
+    d = Doubling(nxt, 10**18)
+    for k in (0, 1, n - 1, n, 10**18):
+        assert d.jump(0, k) == jump_brute(nxt, 0, k)
