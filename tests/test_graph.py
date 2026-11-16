@@ -3,10 +3,18 @@ import random
 
 import pytest
 
+from cplib.graph.bfs import bfs, bfs_prev
+from cplib.graph.dijkstra import dijkstra, dijkstra_prev
 from cplib.graph.floyd_warshall import floyd_warshall
+from cplib.graph.grid_bfs import grid_bfs
+from cplib.graph.lca import LCA
 from cplib.graph.maxflow import MFGraph
 from cplib.graph.mincostflow import MCFGraph
+from cplib.graph.minimum_spanning_tree import minimum_spanning_tree
+from cplib.graph.reconstruct_path import reconstruct_path
 from cplib.graph.scc import SCCGraph
+from cplib.graph.topological_sort import topological_sort
+from cplib.graph.tree_diameter import tree_diameter
 from cplib.graph.two_sat import TwoSAT
 
 
@@ -284,3 +292,301 @@ def test_mcf_graph_unreachable() -> None:
     g.add_edge(0, 1, 3, 1)
     g.add_edge(2, 1, 3, 1)
     assert g.slope(0, 2) == [(0, 0)]
+
+
+def bellman_ford(n: int, s: int, edges: list[tuple[int, int, int]]) -> list[int]:
+    dist = [-1] * n
+    dist[s] = 0
+    for _ in range(n):
+        for u, v, c in edges:
+            if dist[u] >= 0 and (dist[v] < 0 or dist[u] + c < dist[v]):
+                dist[v] = dist[u] + c
+    return dist
+
+
+def assert_shortest_path_tree(
+    s: int,
+    edges: list[tuple[int, int, int]],
+    dist: list[int],
+    prev: list[int],
+) -> None:
+    """prev から復元した経路が、実在する辺をたどって長さ dist になることを確かめる。"""
+    cost = {(u, v): c for u, v, c in sorted(edges, key=lambda e: -e[2])}
+    assert prev[s] == -1
+    for t, d in enumerate(dist):
+        if d < 0:
+            assert prev[t] == -1
+            continue
+        path = reconstruct_path(prev, t)
+        assert path[0] == s and path[-1] == t
+        assert sum(cost[e] for e in itertools.pairwise(path)) == d
+
+
+def random_weighted_edges(
+    rng: random.Random, n: int, max_cost: int
+) -> list[tuple[int, int, int]]:
+    # 自己ループ・多重辺・到達不能な頂点を含む
+    return [
+        (rng.randrange(n), rng.randrange(n), rng.randint(0, max_cost))
+        for _ in range(rng.randint(0, 3 * n))
+    ]
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_dijkstra(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 10)
+    edges = random_weighted_edges(rng, n, rng.choice((0, 3, 10**18)))
+    g: list[list[tuple[int, int]]] = [[] for _ in range(n)]
+    for u, v, c in edges:
+        g[u].append((v, c))
+    s = rng.randrange(n)
+    expected = bellman_ford(n, s, edges)
+    assert dijkstra(g, s) == expected
+    dist, prev = dijkstra_prev(g, s)
+    assert dist == expected
+    assert_shortest_path_tree(s, edges, dist, prev)
+
+
+def test_dijkstra_long_path() -> None:
+    # 距離が 2^63 を超えて多倍長整数になっても正しい
+    n = 10**5
+    g: list[list[tuple[int, int]]] = [[(i + 1, 10**18)] for i in range(n - 1)]
+    g.append([])
+    dist, prev = dijkstra_prev(g, 0)
+    assert dist == [i * 10**18 for i in range(n)]
+    assert dijkstra(g, 0) == dist
+    assert reconstruct_path(prev, n - 1) == list(range(n))
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_bfs(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 10)
+    edges = [(u, v, 1) for u, v, _ in random_weighted_edges(rng, n, 0)]
+    g: list[list[int]] = [[] for _ in range(n)]
+    for u, v, _ in edges:
+        g[u].append(v)
+    s = rng.randrange(n)
+    expected = bellman_ford(n, s, edges)
+    assert bfs(g, s) == expected
+    dist, prev = bfs_prev(g, s)
+    assert dist == expected
+    assert_shortest_path_tree(s, edges, dist, prev)
+
+
+def test_bfs_long_path() -> None:
+    n = 10**5
+    g = [[i + 1] for i in range(n - 1)] + [[]]
+    dist, prev = bfs_prev(g, 0)
+    assert dist == list(range(n)) and bfs(g, 0) == dist
+    assert reconstruct_path(prev, n - 1) == list(range(n))
+
+
+@pytest.mark.parametrize("seed", range(50))
+def test_grid_bfs(seed: int) -> None:
+    rng = random.Random(seed)
+    h, w = rng.randint(1, 6), rng.randint(1, 6)
+    wall = rng.choice("#x")
+    grid = ["".join(rng.choice((wall, ".", "o")) for _ in range(w)) for _ in range(h)]
+    sy, sx = rng.randrange(h), rng.randrange(w)
+    grid[sy] = grid[sy][:sx] + "." + grid[sy][sx + 1 :]
+
+    g: list[list[int]] = [[] for _ in range(h * w)]
+    for y in range(h):
+        for x in range(w):
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < h and 0 <= nx < w and grid[ny][nx] != wall:
+                    g[y * w + x].append(ny * w + nx)
+    flat = bfs(g, sy * w + sx)
+    expected = [flat[y * w : (y + 1) * w] for y in range(h)]
+    assert grid_bfs(grid, sy, sx, wall) == expected
+
+
+def test_grid_bfs_snake() -> None:
+    # 2000 x 2000 の一本道の迷路。最も遠いマスまでの手数は通れるマスの数 - 1
+    h = w = 2000
+    right = "#" * (w - 1) + "."
+    left = "." + "#" * (w - 1)
+    grid = [
+        "." * w if y % 2 == 0 else (right if y % 4 == 1 else left) for y in range(h)
+    ]
+    dist = grid_bfs(grid, 0, 0)
+    assert dist[1][0] == -1
+    assert max(map(max, dist)) == sum(row.count(".") for row in grid) - 1
+
+
+def has_cycle(n: int, edges: list[tuple[int, int]]) -> bool:
+    reach = reachability(n, edges)
+    return any(u == v or reach[v][u] for u, v in edges)
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_topological_sort(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(0, 8)
+    perm = rng.sample(range(n), n)
+    edges: list[tuple[int, int]] = []
+    for _ in range(rng.randint(0, 2 * n) if n else 0):
+        a, b = sorted((rng.randrange(n), rng.randrange(n)))
+        if a != b or rng.random() < 0.1:
+            edges.append((perm[a], perm[b]))
+    if n and rng.random() < 0.3:
+        edges.append((rng.randrange(n), rng.randrange(n)))
+    g: list[list[int]] = [[] for _ in range(n)]
+    for u, v in edges:
+        g[u].append(v)
+    order = topological_sort(g)
+    if has_cycle(n, edges):
+        assert order is None
+        return
+    assert order is not None and sorted(order) == list(range(n))
+    pos = {v: i for i, v in enumerate(order)}
+    assert all(pos[u] < pos[v] for u, v in edges)
+
+
+def test_topological_sort_long_path() -> None:
+    n = 10**5
+    g = [[i - 1] for i in range(n)]
+    g[0] = []
+    assert topological_sort(g) == list(range(n - 1, -1, -1))
+    g[0] = [n - 1]
+    assert topological_sort(g) is None
+
+
+def random_tree(rng: random.Random, n: int) -> list[list[int]]:
+    g: list[list[int]] = [[] for _ in range(n)]
+    perm = rng.sample(range(n), n)
+    for i in range(1, n):
+        p = rng.randrange(max(0, i - 3), i) if rng.random() < 0.5 else rng.randrange(i)
+        g[perm[i]].append(perm[p])
+        g[perm[p]].append(perm[i])
+    return g
+
+
+@pytest.mark.parametrize("seed", range(50))
+def test_lca(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 20)
+    g = random_tree(rng, n)
+    root = rng.randrange(n)
+    parent = [-1] * n
+    depth = [0] * n
+    order = [root]
+    for v in order:
+        for w in g[v]:
+            if w != parent[v] and w != root:
+                parent[w] = v
+                depth[w] = depth[v] + 1
+                order.append(w)
+
+    def ancestors(v: int) -> list[int]:
+        a = [v]
+        while a[-1] != root:
+            a.append(parent[a[-1]])
+        return a
+
+    t = LCA(g, root)
+    assert t.depth == depth
+    for u in range(n):
+        for v in range(n):
+            au = set(ancestors(u))
+            c = next(x for x in ancestors(v) if x in au)
+            assert t.lca(u, v) == c
+            assert t.dist(u, v) == depth[u] + depth[v] - 2 * depth[c]
+
+
+def test_lca_long_path() -> None:
+    n = 10**5
+    g = [[v for v in (i - 1, i + 1) if 0 <= v < n] for i in range(n)]
+    t = LCA(g, n // 2)
+    assert t.lca(0, n // 2 - 1) == n // 2 - 1
+    assert t.lca(0, n - 1) == n // 2
+    assert t.dist(0, n - 1) == n - 1
+
+
+def component_count(n: int, edges: list[tuple[int, int, int]]) -> int:
+    comp = list(range(n))
+    for u, v, _ in edges:
+        cu, cv = comp[u], comp[v]
+        comp = [cu if c == cv else c for c in comp]
+    return len(set(comp))
+
+
+def spanning_forest_cost(n: int, edges: list[tuple[int, int, int]]) -> int:
+    """最小全域森のコストを、辺の部分集合の総当たりで求める。"""
+    k = n - component_count(n, edges)
+    costs = [
+        sum(e[2] for e in chosen)
+        for chosen in itertools.combinations(edges, k)
+        if component_count(n, list(chosen)) == n - k
+    ]
+    return min(costs)
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_minimum_spanning_tree(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 6)
+    edges = [
+        (rng.randrange(n), rng.randrange(n), rng.randint(-5, 5))
+        for _ in range(rng.randint(0, 9))
+    ]
+    total, used = minimum_spanning_tree(n, edges)
+    assert total == spanning_forest_cost(n, edges)
+    assert total == sum(edges[i][2] for i in used)
+    assert len(used) == n - component_count(n, edges)
+    assert component_count(n, [edges[i] for i in used]) == n - len(used)
+    assert sorted(used, key=lambda i: (edges[i][2], i)) == used
+
+
+def test_minimum_spanning_tree_disconnected() -> None:
+    edges = [(0, 1, 5), (2, 3, 1), (3, 2, 0), (1, 1, -3)]
+    assert minimum_spanning_tree(5, edges) == (5, [2, 0])
+    assert minimum_spanning_tree(1, []) == (0, [])
+
+
+def tree_distances(g: list[list[tuple[int, int]]], s: int) -> list[int]:
+    dist = [-1] * len(g)
+    dist[s] = 0
+    stack = [s]
+    while stack:
+        v = stack.pop()
+        for w, c in g[v]:
+            if dist[w] < 0:
+                dist[w] = dist[v] + c
+                stack.append(w)
+    return dist
+
+
+@pytest.mark.parametrize("seed", range(100))
+def test_tree_diameter(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(1, 15)
+    max_cost = rng.choice((0, 1, 10))
+    g: list[list[tuple[int, int]]] = [[] for _ in range(n)]
+    cost: dict[tuple[int, int], int] = {}
+    for v, adj in enumerate(random_tree(rng, n)):
+        for w in adj:
+            if v < w:
+                c = rng.randint(0, max_cost)
+                g[v].append((w, c))
+                g[w].append((v, c))
+                cost[v, w] = cost[w, v] = c
+    expected = max(max(tree_distances(g, s)) for s in range(n))
+    length, path = tree_diameter(g)
+    assert length == expected
+    assert len(set(path)) == len(path)
+    assert sum(cost[e] for e in itertools.pairwise(path)) == length
+
+
+def test_tree_diameter_long_path() -> None:
+    n = 10**5
+    g: list[list[tuple[int, int]]] = [[] for _ in range(n)]
+    for i in range(n - 1):
+        g[i].append((i + 1, 2))
+        g[i + 1].append((i, 2))
+    length, path = tree_diameter(g)
+    assert length == 2 * (n - 1)
+    assert path in (list(range(n)), list(range(n - 1, -1, -1)))
+    assert tree_diameter([[]]) == (0, [0])
