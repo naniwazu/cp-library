@@ -1,3 +1,4 @@
+import itertools
 import random
 from math import comb, factorial, gcd, isqrt, lcm, perm
 
@@ -5,6 +6,12 @@ import pytest
 
 from cplib.math.comb import Comb
 from cplib.math.convolution import convolution
+from cplib.math.divisor_zeta import (
+    divisor_mobius,
+    divisor_zeta,
+    multiple_mobius,
+    multiple_zeta,
+)
 from cplib.math.floor_sum import floor_sum
 from cplib.math.matrix import mat_mul, mat_pow
 from cplib.math.mod import crt, ext_gcd, inv_mod
@@ -15,6 +22,14 @@ from cplib.math.prime import (
     min_factor_table,
     primes,
 )
+from cplib.math.quotient_ranges import quotient_ranges
+from cplib.math.subset_zeta import (
+    subset_mobius,
+    subset_zeta,
+    superset_mobius,
+    superset_zeta,
+)
+from cplib.math.xor_basis import XorBasis
 
 MOD = 998244353
 
@@ -292,3 +307,126 @@ def test_mat_pow_large() -> None:
     assert f2[0][1] == f[0][1] * (2 * f[0][0] - f[0][1]) % MOD
     a = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
     assert mat_pow(a, 10**18 + 1, MOD) == mat_mul(mat_pow(a, 10**18, MOD), a, MOD)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_subset_zeta(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.choice((0, 1, rng.randint(0, 8)))
+    lim = rng.choice((3, MOD, 10**30))
+    a = [rng.randint(-lim, lim) for _ in range(1 << n)]
+    sub = [sum(a[t] for t in range(1 << n) if t & s == t) for s in range(1 << n)]
+    sup = [sum(a[t] for t in range(1 << n) if t & s == s) for s in range(1 << n)]
+    b = a[:]
+    assert subset_zeta(b) is None
+    assert b == sub
+    subset_mobius(b)
+    assert b == a
+    b = a[:]
+    superset_zeta(b)
+    assert b == sup
+    superset_mobius(b)
+    assert b == a
+
+
+def test_subset_zeta_empty() -> None:
+    a: list[int] = []
+    subset_zeta(a)
+    superset_mobius(a)
+    assert a == []
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_divisor_zeta(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.choice((0, 1, 2, rng.randint(0, 300)))
+    lim = rng.choice((3, MOD, 10**30))
+    a = [rng.randint(-lim, lim) for _ in range(n + 1)]
+    div = [a[0]] + [
+        sum(a[d] for d in range(1, k + 1) if k % d == 0) for k in range(1, n + 1)
+    ]
+    mul = [a[0]] + [sum(a[m] for m in range(d, n + 1, d)) for d in range(1, n + 1)]
+    b = a[:]
+    assert divisor_zeta(b) is None
+    assert b == div
+    divisor_mobius(b)
+    assert b == a
+    b = a[:]
+    multiple_zeta(b)
+    assert b == mul
+    multiple_mobius(b)
+    assert b == a
+
+
+def test_divisor_zeta_empty() -> None:
+    a: list[int] = []
+    divisor_zeta(a)
+    multiple_mobius(a)
+    assert a == []
+
+
+def test_multiple_mobius_gcd_count() -> None:
+    # 1..n から 2 つ選んだ順序対で gcd がちょうど d のものの数
+    n = 60
+    a = [0] + [(n // d) ** 2 for d in range(1, n + 1)]
+    multiple_mobius(a)
+    for d in range(1, n + 1):
+        expected = sum(gcd(x, y) == d for x in range(1, n + 1) for y in range(1, n + 1))
+        assert a[d] == expected
+
+
+def span(vs: list[int]) -> set[int]:
+    res = {0}
+    for v in vs:
+        res |= {x ^ v for x in res}
+    return res
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_xor_basis(seed: int) -> None:
+    rng = random.Random(seed)
+    bits = rng.choice((1, 3, 6))
+    xb = XorBasis()
+    added: list[int] = []
+    for _ in range(rng.choice((0, 1, rng.randint(0, 12)))):
+        x = rng.randrange(1 << bits)
+        before = span(added)
+        assert xb.add(x) == (x not in before)
+        added.append(x)
+        sp = span(added)
+        assert len(xb) == len(sp).bit_length() - 1
+        for y in range(1 << (bits + 1)):
+            assert (y in xb) == (y in sp)
+            assert xb.max(y) == max(y ^ v for v in sp)
+            assert xb.min(y) == min(y ^ v for v in sp)
+    assert xb.max() == max(span(added))
+    assert xb.min() == 0
+
+
+def test_xor_basis_large() -> None:
+    xb = XorBasis()
+    vs = [1 << 100, (1 << 100) | 1, 1 << 200]
+    assert [xb.add(v) for v in vs] == [True, True, True]
+    assert not xb.add((1 << 200) | 1)
+    assert xb.max() == (1 << 200) | (1 << 100) | 1
+    assert (1 << 50) not in xb
+    assert len(xb) == 3
+
+
+def test_quotient_ranges() -> None:
+    for n in range(0, 300):
+        got = list(quotient_ranges(n))
+        expected: list[tuple[int, int, int]] = []
+        for i in range(1, n + 1):
+            if expected and expected[-1][2] == n // i:
+                l, _, q = expected[-1]
+                expected[-1] = (l, i + 1, q)
+            else:
+                expected.append((i, i + 1, n // i))
+        assert got == expected
+    n = 10**12
+    got = list(quotient_ranges(n))
+    assert got[0][0] == 1 and got[-1][1] == n + 1
+    assert all(r1 == l2 for (_, r1, _), (l2, _, _) in itertools.pairwise(got))
+    assert all(n // l == q == n // (r - 1) for l, r, q in got)
+    assert len(got) <= 2 * isqrt(n)
