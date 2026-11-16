@@ -24,6 +24,7 @@ class LazySegTree(Generic[_LazySegTreeS, _LazySegTreeF]):
 
     値や写像をタプルで持つと生成コストで数倍遅くなる。区間 affine・区間和のように
     複数の数を持つ場合は、`v << 20 | 長さ` のように 1 つの int に詰める。
+    ただし詰めた値が 2^63 を超えると多倍長になり、かえって遅くなる。
 
     Examples:
         区間加算・区間最小（mapping も composition も加算、id_ は 0）:
