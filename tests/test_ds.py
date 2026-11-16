@@ -1,6 +1,7 @@
 import bisect
 import random
 from collections.abc import Callable
+from itertools import accumulate
 from math import gcd
 
 import pytest
@@ -8,6 +9,8 @@ import pytest
 from cplib.ds.dsu import DSU
 from cplib.ds.fenwick_tree import FenwickTree
 from cplib.ds.lazy_segtree import LazySegTree
+from cplib.ds.range_fenwick_tree import RangeFenwickTree
+from cplib.ds.removable_heap import RemovableHeap
 from cplib.ds.segtree import SegTree
 from cplib.ds.slope_trick import SlopeTrick
 from cplib.ds.sorted_list import SortedList
@@ -30,6 +33,42 @@ def test_fenwick_tree(seed: int) -> None:
         else:
             l = rng.randint(0, n)
             r = rng.randint(l, n)
+            assert ft.sum(l, r) == sum(a[l:r])
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_fenwick_tree_bisect_left(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(0, 30)
+    ft = FenwickTree(n)
+    a = [0] * n
+    for _ in range(50):
+        if n:
+            # 0 を多めにして、累積和が横ばいになる区間を作る
+            p = rng.randrange(n)
+            x = rng.choice([0, 0, 1, 2])
+            ft.add(p, x)
+            a[p] += x
+        prefix = list(accumulate(a))
+        for w in range(-1, sum(a) + 2):
+            assert ft.bisect_left(w) == bisect.bisect_left(prefix, w)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_range_fenwick_tree(seed: int) -> None:
+    rng = random.Random(seed)
+    n = rng.randint(0, 30)
+    ft = RangeFenwickTree(n)
+    a = [0] * n
+    for _ in range(200):
+        l = rng.randint(0, n)
+        r = rng.randint(l, n)
+        if rng.random() < 0.5:
+            x = rng.randint(-100, 100)
+            ft.add(l, r, x)
+            for i in range(l, r):
+                a[i] += x
+        else:
             assert ft.sum(l, r) == sum(a[l:r])
 
 
@@ -321,3 +360,50 @@ def test_sparse_table(n: int, op: Callable[[int, int], int]) -> None:
             if r - 1 > l:
                 acc = op(acc, a[r - 1])
             assert st.prod(l, r) == acc
+
+
+def test_removable_heap_empty() -> None:
+    h = RemovableHeap[int]()
+    assert len(h) == 0
+    with pytest.raises(IndexError):
+        h.top()
+    with pytest.raises(IndexError):
+        h.pop()
+    h.push(1)
+    h.remove(1)
+    assert len(h) == 0
+    with pytest.raises(IndexError):
+        h.top()
+    with pytest.raises(IndexError):
+        h.pop()
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_removable_heap(seed: int) -> None:
+    rng = random.Random(seed)
+    # 値の範囲を狭くして重複を多くする場合と、広くする場合を混ぜる
+    hi = rng.choice([2, 30, 10**9])
+    h = RemovableHeap[int]()
+    ref: list[int] = []
+    for _ in range(1000):
+        t = rng.randrange(4)
+        if t == 0 or not ref:
+            x = rng.randint(0, hi)
+            h.push(x)
+            ref.append(x)
+        elif t == 1:
+            x = rng.choice(ref)
+            h.remove(x)
+            ref.remove(x)
+        elif t == 2:
+            assert h.top() == min(ref)
+        else:
+            x = min(ref)
+            assert h.pop() == x
+            ref.remove(x)
+        assert len(h) == len(ref)
+    while ref:
+        x = min(ref)
+        assert h.pop() == x
+        ref.remove(x)
+    assert len(h) == 0

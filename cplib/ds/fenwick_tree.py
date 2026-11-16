@@ -38,3 +38,31 @@ class FenwickTree:
             s -= data[l]
             l &= l - 1
         return s
+
+    def bisect_left(self, w: int) -> int:
+        """a[0] + ... + a[i] >= w となる最小の i を返す。なければ n。O(log n)。
+
+        各 a[i] は 0 以上であること。累積和の列 [a[0], a[0] + a[1], ...] に対する
+        bisect.bisect_left と同じ値になる。a[v] を値 v の個数とすれば、k 番目
+        （0-indexed）に小さい値は bisect_left(k + 1) で求まる。
+
+        Examples:
+            >>> ft = FenwickTree(6)
+            >>> for v in [4, 1, 4, 2]:  # 値 v の個数を数える
+            ...     ft.add(v, 1)
+            >>> [ft.bisect_left(k + 1) for k in range(4)]  # 小さいほうから k 番目
+            [1, 2, 4, 4]
+            >>> ft.bisect_left(5), ft.bisect_left(0)
+            (6, 0)
+        """
+        n = self._n
+        data = self._data
+        p = 0
+        # 2 のべきの幅で、和が w 未満のまま進める最も右の位置まで下りる
+        k = 1 << n.bit_length()
+        while k:
+            if p + k <= n and data[p + k] < w:
+                p += k
+                w -= data[p]
+            k >>= 1
+        return p
